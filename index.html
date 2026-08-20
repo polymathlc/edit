@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photo Editor · Polymath</title>
+<meta name="description" content="Paste a picture, edit it, take a file away. Nothing is uploaded and nothing is saved.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+<!-- ONE non-blocking font request, the portal's rule. A render-blocking
+     stylesheet from Google Fonts puts first paint at the mercy of the
+     network, and this app has to be usable the moment it opens. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Mono&display=swap"></noscript>
+<!-- What starts the app download early. Keep it, and keep it pointing at the
+     right filename. -->
+<link rel="modulepreload" href="editor.js">
+<style>
+/* ── Ink & Emerald — the portal's palette, so the two apps look like one
+      centre. Everything below is written against these tokens and nothing
+      else, which is what lets the whole sheet be re-themed from here. ──── */
+:root {
+  --bg: #f5f7f6;
+  --surface: #ffffff;
+  --surface-alt: #fafbfa;
+  --border: #e3e6e4;
+  --text: #14161a;
+  --text-muted: #666c71;
+  --text-light: #7f868b;
+  --primary: #0b6b4f;
+  --primary-hover: #085740;
+  --primary-dark: #064834;
+  --primary-light: #e4f1ec;
+  --accent: #c08a2e;
+  --accent-light: #fdf4e3;
+  --accent-red: #b23b36;
+  --accent-red-light: #fbeceb;
+  --accent-blue: #2d6ca8;
+  --accent-purple: #6b4fa0;
+  --shadow-sm: 0 1px 2px rgba(16,22,26,0.05), 0 2px 8px rgba(16,22,26,0.05);
+  --shadow-md: 0 1px 3px rgba(16,22,26,0.05), 0 4px 14px rgba(16,22,26,0.07);
+  --shadow-lg: 0 4px 8px rgba(16,22,26,0.06), 0 14px 38px rgba(16,22,26,0.11);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --transition: 0.2s ease;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 15px; }
+body {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+/* A form control does not inherit the page font, and a <button> does not
+   inherit its colour either — it falls back to the browser's own near-black
+   button text, which disappears the moment a surface goes dark. */
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: var(--text); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 22px; border: none; border-radius: var(--radius-sm);
+  font-size: 0.88rem; font-weight: 600; cursor: pointer;
+  transition: all var(--transition);
+}
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn-outline { background: var(--surface); color: var(--text); border: 1.5px solid var(--border); }
+.btn-outline:hover { border-color: var(--text-muted); background: var(--surface-alt); }
+.btn-ghost { background: transparent; color: var(--text); border: 1.5px solid var(--border); }
+.btn-ghost:hover { background: var(--surface-alt); border-color: var(--text-light); }
+.btn:disabled { opacity: .55; cursor: default; transform: none; box-shadow: none; }
+.hint { font-size: 0.78rem; color: var(--text-muted); margin-top: 4px; }
+
+/* ── Overlays ────────────────────────────────────────────────────────── */
+.overlay { display: none; position: fixed; inset: 0; background: rgba(20,18,16,0.5); z-index: 300; align-items: center; justify-content: center; padding: 20px; }
+.overlay.show { display: flex; }
+.overlay-card { background: var(--surface); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto; }
+.overlay-head { display: flex; align-items: center; padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.overlay-head h3 { font-size: 1.1rem; font-weight: 700; }
+.overlay-head .close { margin-left: auto; background: none; border: none; font-size: 1.4rem; cursor: pointer; color: var(--text-muted); line-height: 1; }
+.overlay-body { padding: 22px; }
+.overlay-foot { padding: 16px 22px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
+/* The editor overlay is the app, not a dialog over it — it gets the screen. */
+#annotOverlay { padding: 12px; }
+#annotOverlay .overlay-card { max-width: none; width: auto; max-height: 96vh; }
+
+/* ── Toasts ──────────────────────────────────────────────────────────── */
+.toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 400; display: flex; flex-direction: column; gap: 10px; }
+.toast {
+  padding: 12px 20px; border-radius: var(--radius-sm);
+  font-size: 0.88rem; font-weight: 500; color: #fff;
+  box-shadow: var(--shadow-lg); animation: toastIn 0.3s ease;
+  display: flex; align-items: center; gap: 8px; max-width: 420px;
+}
+.toast.success { background: var(--primary); }
+.toast.error { background: var(--accent-red); }
+.toast.info { background: var(--accent-blue); }
+@keyframes toastIn { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── The landing page ────────────────────────────────────────────────── */
+.pe-wrap { max-width: 780px; margin: 0 auto; padding: 56px 24px 72px; }
+.pe-head { text-align: center; margin-bottom: 34px; }
+.pe-head h1 { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+.pe-head p { margin-top: 10px; font-size: 0.92rem; color: var(--text-muted); line-height: 1.75; }
+.pe-zone {
+  border: 2px dashed var(--border); border-radius: 16px;
+  padding: 56px 28px; text-align: center; cursor: pointer;
+  background: var(--surface); transition: border-color .15s, background .15s;
+}
+.pe-zone:hover, .pe-zone:focus-visible, .pe-zone.dragover {
+  border-color: var(--primary); background: var(--primary-light); outline: none;
+}
+.pe-zone-icon { font-size: 2.4rem; line-height: 1; margin-bottom: 14px; }
+.pe-zone-main { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+.pe-zone-sub { font-size: 0.83rem; color: var(--text-muted); line-height: 1.7; }
+kbd {
+  font-family: 'Space Mono', monospace; font-size: 0.76rem;
+  border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px;
+  padding: 1px 5px; background: var(--surface-alt); white-space: nowrap;
+}
+.pe-status { min-height: 20px; margin-top: 14px; text-align: center; font-size: 0.85rem; color: var(--text-muted); }
+.pe-help { border: 1px solid var(--border); border-radius: 14px; padding: 24px 28px; margin-top: 22px; background: var(--surface); }
+.pe-help h4 { margin: 0 0 14px; font-size: 0.95rem; font-weight: 700; }
+.pe-help p { margin: 0 0 13px; font-size: 0.86rem; line-height: 1.8; color: var(--text-muted); }
+.pe-help p:last-child { margin-bottom: 0; }
+.pe-help strong { color: var(--text); font-weight: 600; }
+.pe-foot { margin-top: 26px; text-align: center; font-size: 0.78rem; color: var(--text-light); line-height: 1.8; }
+
+/* ── The export panel ────────────────────────────────────────────────── */
+.ex-row { margin-bottom: 22px; }
+.ex-row:last-child { margin-bottom: 0; }
+.ex-label { display: block; font-size: 0.78rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; }
+.ex-seg { display: flex; gap: 8px; flex-wrap: wrap; }
+.ex-chip {
+  padding: 7px 15px; border: 1.5px solid var(--border); background: var(--surface);
+  border-radius: 999px; cursor: pointer; font-size: 0.83rem; font-weight: 600; color: var(--text);
+  transition: all var(--transition);
+}
+.ex-chip:hover { border-color: var(--text-muted); }
+.ex-chip.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary-dark); }
+.ex-slider { display: flex; align-items: center; gap: 12px; }
+.ex-slider input[type=range] { flex: 1 1 auto; min-width: 100px; accent-color: var(--primary); }
+.ex-slider output, .ex-slider .ex-num { min-width: 52px; text-align: right; font-size: 0.85rem; font-variant-numeric: tabular-nums; font-weight: 600; }
+.ex-note { font-size: 0.79rem; color: var(--text-muted); line-height: 1.7; margin-top: 9px; }
+.ex-was { color: var(--text-light); font-weight: 400; }
+.ex-calc { color: var(--text-light); font-weight: 400; font-style: italic; }
+.ex-summary {
+  position: sticky; bottom: -22px; z-index: 1;
+  display: flex; flex-wrap: wrap; gap: 8px 26px; align-items: baseline;
+  padding: 15px 18px; border-radius: var(--radius-md);
+  background: var(--surface-alt); border: 1px solid var(--border);
+  font-size: 0.88rem; color: var(--text-muted);
+}
+.ex-summary b { color: var(--text); font-variant-numeric: tabular-nums; }
+.ex-warn {
+  margin-top: 12px; padding: 12px 15px; border-radius: var(--radius-md);
+  background: var(--accent-red-light); border: 1px solid rgba(178,59,54,0.28);
+  color: #7d2723; font-size: 0.81rem; line-height: 1.7;
+}
+.ex-name { display: flex; align-items: center; gap: 2px; }
+.ex-name input {
+  flex: 1 1 auto; min-width: 0; padding: 9px 12px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  background: var(--surface); font-size: 0.86rem;
+}
+.ex-name input:focus { outline: none; border-color: var(--primary); }
+.ex-name .ex-ext {
+  padding: 9px 12px; border: 1px solid var(--border); border-left: none;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface-alt); color: var(--text-muted);
+  font-size: 0.86rem; font-variant-numeric: tabular-nums;
+}
+/* Tailwind is not in this app, but a number input still needs its spinners
+   asked for explicitly on some engines, and a bare checkbox/radio needs
+   appearance:auto anywhere a reset has been near it. */
+#exOverlay input[type=number] { width: 92px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+#exOverlay input[type=color] { width: 38px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; }
+input[type=checkbox], input[type=radio] { appearance: auto; -webkit-appearance: auto; }
+
+/* The guide is a wall of text — useful, and not what you want between the
+   picture and the buttons every time you open the app. */
+.annot-guide { max-width: 1200px; margin: 12px auto 0; text-align: left; }
+.annot-guide > summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 7px;
+  font-size: 0.79rem; font-weight: 600; color: var(--text-muted);
+  padding: 5px 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--surface); user-select: none;
+}
+.annot-guide > summary::-webkit-details-marker { display: none; }
+.annot-guide > summary::before { content: '❔'; }
+.annot-guide > summary:hover { border-color: var(--text-muted); color: var(--text); }
+.annot-guide[open] > summary { margin-bottom: 12px; }
+.annot-guide .hint { line-height: 1.85; }
+
+@media (max-width: 620px) {
+  .pe-wrap { padding: 32px 16px 56px; }
+  .pe-zone { padding: 40px 18px; }
+  .toast-container { left: 16px; right: 16px; bottom: 16px; }
+  .toast { max-width: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ==================== THE LANDING PAGE ==================== -->
+<div class="pe-wrap" id="peLanding">
+  <div class="pe-head">
+    <h1>🎨 Photo Editor</h1>
+    <p>Paste a picture, edit it, take a file away.<br>
+       Nothing is uploaded and nothing is saved — the picture never leaves this tab.</p>
+  </div>
+
+  <div class="pe-zone" id="peZone" tabindex="0"
+       onclick="peZoneClick()"
+       onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();peZoneClick();}"
+       ondragover="event.preventDefault(); this.classList.add('dragover');"
+       ondragleave="this.classList.remove('dragover')"
+       ondrop="peDrop(event)">
+    <div class="pe-zone-icon">🖼</div>
+    <div class="pe-zone-main">Paste a picture, drop one here, or click to choose a file</div>
+    <div class="pe-zone-sub"><kbd>Ctrl</kbd>+<kbd>V</kbd> (<kbd>⌘V</kbd>) pastes whatever is on your clipboard — a screenshot, a photo, a diagram</div>
+    <input type="file" id="peFile" accept="image/*" style="display:none;" onchange="pePickFiles(this)">
+  </div>
+  <div id="peStatus" class="pe-status"></div>
+
+  <div class="pe-help">
+    <h4>What you can do in here</h4>
+    <p><strong>Erase, paint, fill, clone, history brush</strong> — with the brush ring showing the exact size of the mark before you make it, and the clone stamp previewing the patch it is about to lay down.</p>
+    <p><strong>Select, lasso, magic wand</strong> — then move, resize, rotate, skew, delete to transparent, or fill. <kbd>Alt</kbd>+click with the wand takes a colour across the whole picture, which is how you cut a background away cleanly.</p>
+    <p><strong>Paste a second picture on top</strong> and it lands as its own layer, sized to fit and never full-bleed, with the resize handles already on it: drag a corner to size it, drag the middle to move it, turn or slant it, then <strong>✓ Apply</strong> to burn it in. <kbd>Esc</kbd> takes it away again and leaves no trace.</p>
+    <p><strong>Straighten</strong> a crooked scan by tracing a line along an edge. <strong>Line</strong> and <strong>text</strong> to label. <strong>🧻 Clean paper</strong> snaps a grey scan background to white without touching the drawing.</p>
+    <p><strong>✨ Regenerate</strong> — type what you want changed and the AI redraws it. Select an area first and only that area can change. It is one undo step either way. (This is the only thing here that needs a network; if it is unavailable the button simply is not there.)</p>
+    <p>When you are done, <strong>⬇️ Export</strong> lets you pick the format, the size and the quality — and shows the real file size before you save it — or copies the picture straight to your clipboard. Transparency is kept, so a cut-out stays cut out.</p>
+  </div>
+
+  <p class="pe-foot">
+    Polymath Learning Centre · the touch-up tool from the Science Learning Portal, on its own<br>
+    Everything happens in your browser. No account, no upload, no storage.
+  </p>
+</div>
+
+<!-- ==================== THE EDITOR ==================== -->
+<!-- A verbatim copy of the portal's touch-up overlay, so the two can be
+     diffed. The only changes are the two buttons in the foot: there ✓ Apply
+     wrote the picture back to a question; here it opens the export panel. -->
+<div class="overlay" id="annotOverlay">
+  <div class="overlay-card">
+    <div class="overlay-head"><h3>🎨 Photo Editor</h3><button class="close" onclick="closeAnnotTool()" type="button" title="Close and go back (your edits are discarded)">×</button></div>
+    <div class="overlay-body" style="text-align:center;">
+      <div class="annot-tools">
+        <button type="button" class="annot-tool" data-atool="erase" title="Erase — Photoshop style: click a point then Shift-click another to join them with a straight line; Shift-drag locks to horizontal / vertical. The ⬜/▨ button beside it says whether this cuts through to transparent or paints white.">🩹 Erase</button>
+        <button type="button" class="annot-tool" id="annotEraseTo" onclick="annotToggleEraseTo()" title="What Erase, the paint bucket and Delete leave behind: transparent (the default here — the file that leaves is a PNG that keeps its alpha) or white (for rubbing a word off a scan of a printed page)">▨ Erase to: <b>transparent</b></button>
+        <button type="button" class="annot-tool" data-atool="paint" title="Paint over with the chosen colour — Photoshop style: click a point then Shift-click another to join them with a straight line; Shift-drag locks to horizontal / vertical">🖌️ Paint</button>
+        <button type="button" class="annot-tool" data-atool="fill" title="Paint bucket (G) — click inside a shape or area to flood it with the chosen colour. The strip at the bottom of the bucket is the colour that will be poured.">
+          <svg class="annot-bucket" viewBox="0 0 24 26" aria-hidden="true">
+            <g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">
+              <path d="M11.2 4.2 4.4 11a1.7 1.7 0 0 0 0 2.4l4.9 4.9a1.7 1.7 0 0 0 2.4 0l6.8-6.8z"/>
+              <path d="M8.9 6.5 6.4 4"/>
+            </g>
+            <path d="M20.6 12.6s1.9 2.5 1.9 3.8a1.9 1.9 0 1 1-3.8 0c0-1.3 1.9-3.8 1.9-3.8z" class="annot-bucket-paint"/>
+            <rect x="2" y="22.2" width="20" height="3.4" rx="1.7" class="annot-bucket-paint"/>
+          </svg> Fill</button>
+        <button type="button" class="annot-tool" data-atool="clone" title="Clone stamp (S): click to set a source point, then drag to copy that part of the picture elsewhere. Alt+click to re-set the source.">🧬 Clone</button>
+        <button type="button" class="annot-tool" data-atool="history" title="History brush (Y) — brush the ORIGINAL picture back wherever you drag, undoing your edits by hand, one stroke at a time">🕘 History</button>
+        <button type="button" class="annot-tool" data-atool="select" title="Rectangle select (M): drag a box around an area, then fill it, move it, or use AI content-aware fill">⬚ Select</button>
+        <button type="button" class="annot-tool" data-atool="lasso" title="Lasso select (L): draw freehand around an area, then fill it, move it, or use AI content-aware fill">➰ Lasso</button>
+        <button type="button" class="annot-tool" data-atool="wand" title="Magic wand (W): click a colour to select every pixel like it. Alt+click selects that colour across the WHOLE picture, not just the patch you clicked. Use the ± slider to widen or tighten what counts as the same colour.">🪄 Wand</button>
+        <button type="button" class="annot-tool" data-atool="move" title="Move (V): drag inside a selection to cut it out and drop it anywhere — hold Alt to copy instead of cut. Also drags text labels around.">✥ Move</button>
+        <button type="button" class="annot-tool" data-atool="rotate" title="Rotate (R): drag on the image to turn it — hold Shift to snap to 15°. With an area selected it turns just that object; with nothing selected it straightens the whole picture. Use 📐 Straighten to trace a crooked edge and level it automatically.">🔄 Rotate</button>
+        <button type="button" class="annot-tool" data-atool="scale" title="Resize / free transform (F): drag the handles round the box to make the selected object bigger or smaller — corners resize both ways, edges one way, and the opposite corner stays put. Drag inside the box to move it. Shift swaps between keeping the shape and stretching it freely. With nothing selected it resizes the whole picture.">⤢ Resize</button>
+        <button type="button" class="annot-tool" data-atool="skew" title="Skew (K): drag sideways to slant sideways, up/down to slant up/down — for objects photographed at an angle. Works on the selected area, or the whole picture if nothing is selected.">▱ Skew</button>
+        <button type="button" class="annot-tool" data-atool="line" title="Drag to draw a straight label line (U) — hold Shift to snap to 45° angles">📏 Line</button>
+        <button type="button" class="annot-tool" onclick="annotCleanPaper()" title="Clean paper: snaps the near-white background to pure white, taking out a grey scan background, the faint diagonal weave an AI re-render leaves behind, and a faint printed watermark. The drawing is untouched — it refuses outright on a photo or on artwork with no white page. ↶ Undo puts it back.">🧻 Clean paper</button>
+        <button type="button" class="annot-tool" onclick="annotPasteFromClipboard()" title="Paste a picture in from the clipboard (Ctrl+V / ⌘V) — a screenshot, a photo, a figure from somewhere else. It lands as its own layer, scaled to fit, with the resize handles already on it: drag a corner to size it, drag the middle to move it, then ✓ Apply.">📋 Paste picture</button>
+        <button type="button" class="annot-tool" data-atool="text" title="Click to drop a text label (T)">🔤 Text</button>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:5px;">Colour <input type="color" id="annotColor" value="#e23c3c" oninput="_annotSyncControls()" style="width:34px;height:28px;padding:0;border:1px solid var(--border);border-radius:6px;"></label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:5px;" title="Brush size in image pixels — set to 1 to paint a single pixel. The ring around your pointer on the picture IS this size, drawn at the current zoom. [ and ] change it, and you can scroll your mouse wheel over the slider.">Brush <input type="range" id="annotSize" min="1" max="60" value="6" oninput="_annotSyncControls()"><span id="annotSizeVal" style="min-width:30px;font-variant-numeric:tabular-nums;">6&nbsp;px</span></label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:5px;" title="How close a colour has to be to count as the same one — used by the magic wand and the paint bucket. Scroll your mouse wheel over the slider to change it.">Match ± <input type="range" id="annotTol" min="0" max="120" value="32" oninput="_annotSyncControls()"><span id="annotTolVal" style="min-width:26px;font-variant-numeric:tabular-nums;">32</span></label>
+        <span style="width:1px;height:20px;background:var(--border);"></span>
+        <button type="button" class="annot-tool" onclick="annotZoomStep(1/1.3)" title="Zoom out">➖</button>
+        <span id="annotZoomVal" style="font-size:0.78rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums;">100%</span>
+        <button type="button" class="annot-tool" onclick="annotZoomStep(1.3)" title="Zoom in">➕</button>
+        <button type="button" class="annot-tool" onclick="annotZoomFit()" title="Fit the whole image in view">⤢ Fit</button>
+        <button type="button" class="btn btn-outline" style="padding:5px 10px;font-size:0.8rem;" onclick="annotUndo()">↶ Undo</button>
+      </div>
+      <div id="annotSelBar" style="display:none;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:0 auto 12px;padding:8px 14px;border:1.5px solid var(--primary);background:var(--primary-light);border-radius:10px;max-width:820px;">
+        <span style="font-size:0.8rem;font-weight:700;color:var(--primary);">Selection:</span>
+        <button type="button" class="annot-tool" onclick="annotSelDelete()" title="Delete the selected area — it becomes TRANSPARENT, not white or black, and the PNG keeps the hole. With the 🪄 wand, Alt+click a colour first to take that colour across the whole picture, then press this (or the Delete key).">🧽 Delete (transparent)</button>
+        <button type="button" class="annot-tool" onclick="annotSelFillColour()" title="Fill the selected area with the chosen colour">🎨 Fill colour</button>
+        <button type="button" class="annot-tool" onclick="annotSelPatchFill()" title="Fill the selected area by extending the surrounding pixels inwards (fast, no AI)">🧵 Fill from surroundings</button>
+        <button type="button" class="annot-tool" id="annotAiFillBtn" onclick="annotSelAiFill()" title="AI content-aware fill: the AI removes what is selected and seamlessly reconstructs the background / surrounding texture">✨ AI content-aware fill</button>
+        <button type="button" class="annot-tool" data-atool="move" title="Move (V) — drag inside the selection to cut it out and drop it anywhere; hold Alt to copy instead">✥ Move it</button>
+        <button type="button" class="annot-tool" data-atool="scale" title="Resize (F) — lift this object out and drag the handles to make it bigger or smaller; drag inside the box to move it">⤢ Resize it</button>
+        <button type="button" class="annot-tool" data-atool="rotate" title="Rotate (R) — lift this object out and turn it; drag on the image or use the sliders">🔄 Turn it</button>
+        <button type="button" class="annot-tool" data-atool="skew" title="Skew (K) — lift this object out and slant it, for something photographed at an angle">▱ Slant it</button>
+        <button type="button" class="annot-tool" onclick="annotSelClear()" title="Deselect (Esc)">✕ Deselect</button>
+      </div>
+
+      <!-- ✨ Regenerate: type what you want and the AI redraws it. With an area
+           selected only that area may change; with nothing selected the whole
+           picture is redrawn. Either way it is ONE history step, so ↶ Undo puts
+           the picture straight back. Hidden outright when the AI is not
+           available — see _aiVisibilitySync. -->
+      <div id="annotAiBar" style="display:none;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:0 auto 12px;padding:10px 16px;border:1.5px solid #7c3aed;background:#f6f2ff;border-radius:10px;max-width:900px;">
+        <span style="font-size:0.8rem;font-weight:700;color:#5b21b6;white-space:nowrap;">✨ Regenerate:</span>
+        <input type="text" id="annotAiPrompt" placeholder="Say what you want changed — “rub out the pencil marks”, “make the arrow red”, “redraw this beaker cleanly”" style="flex:1 1 360px;min-width:200px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;font-size:0.85rem;background:#fff;color:var(--text);" onkeydown="if(event.key==='Enter'){event.preventDefault();annotAiRegen();}">
+        <button type="button" class="btn btn-primary" id="annotAiGoBtn" style="padding:6px 14px;font-size:0.82rem;" onclick="annotAiRegen()" title="Redraw with the AI. Select an area first and only that area can change; with nothing selected the whole picture is redrawn. ↶ Undo puts it back either way.">✨ Regenerate</button>
+        <span style="font-size:0.75rem;color:#5b21b6;white-space:nowrap;">changes <b id="annotAiScope">the whole picture</b></span>
+      </div>
+
+      <!-- Resize / rotate / skew panel: appears while a transform is open,
+           disappears on Apply or Cancel. A pasted picture opens it too, with
+           Resize already the tool in hand. -->
+      <div id="annotXformBar" style="display:none;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:center;margin:0 auto 12px;padding:12px 18px;border:1.5px solid #b45309;background:#fdf4e3;border-radius:12px;max-width:880px;">
+        <span style="font-size:0.8rem;font-weight:700;color:#92400e;">Transforming <span id="annotXformScope">the whole picture</span>:</span>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="Width, as a percentage of the original. Drag the handles round the box for the same thing.">W
+          <input type="number" id="annotXformSxNum" min="5" max="800" step="1" value="100" onchange="annotXformSetScale('sx', this.value)" style="width:64px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:0.78rem;font-variant-numeric:tabular-nums;">%
+        </label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="Height, as a percentage of the original.">H
+          <input type="number" id="annotXformSyNum" min="5" max="800" step="1" value="100" onchange="annotXformSetScale('sy', this.value)" style="width:64px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:0.78rem;font-variant-numeric:tabular-nums;">%
+        </label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="On: width and height stay in step, so the object keeps its shape. Off: stretch it freely. Holding Shift while you drag a handle swaps between the two.">
+          <input type="checkbox" id="annotXformLock" checked onchange="annotXformSetLock(this.checked)" style="width:15px;height:15px;cursor:pointer;"> Keep shape
+        </label>
+        <span id="annotXformSizePx" style="font-size:0.75rem;color:#92400e;font-variant-numeric:tabular-nums;min-width:86px;">&nbsp;</span>
+        <button type="button" class="annot-tool" onclick="annotXformFlip('x')" title="Mirror left-to-right">⇄ Flip</button>
+        <button type="button" class="annot-tool" onclick="annotXformFlip('y')" title="Mirror top-to-bottom">⇅ Flip</button>
+        <span style="width:1px;height:20px;background:#e0c9a0;"></span>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="Turn the object. Drag on the image for the same thing — hold Shift there to snap to 15°. Scroll your mouse wheel over the slider for fine steps.">Turn
+          <input type="range" id="annotXformAngle" min="-180" max="180" step="0.5" value="0" oninput="annotXformSet('angle', this.value)" style="width:150px;">
+          <input type="number" id="annotXformAngleNum" min="-180" max="180" step="0.1" value="0" onchange="annotXformSet('angle', this.value)" style="width:66px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;font-size:0.78rem;font-variant-numeric:tabular-nums;">°
+        </label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="Slant sideways — the top leans one way, the bottom the other. This is what fixes a diagram photographed from the side.">Slant&nbsp;↔
+          <input type="range" id="annotXformSkewX" min="-60" max="60" step="0.5" value="0" oninput="annotXformSet('skewX', this.value)" style="width:110px;">
+          <span id="annotXformSkewXVal" style="min-width:34px;font-variant-numeric:tabular-nums;">0°</span>
+        </label>
+        <label style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="Slant up and down — the left edge leans one way, the right edge the other.">Slant&nbsp;↕
+          <input type="range" id="annotXformSkewY" min="-60" max="60" step="0.5" value="0" oninput="annotXformSet('skewY', this.value)" style="width:110px;">
+          <span id="annotXformSkewYVal" style="min-width:34px;font-variant-numeric:tabular-nums;">0°</span>
+        </label>
+        <span style="width:1px;height:20px;background:#e0c9a0;"></span>
+        <button type="button" class="annot-tool" onclick="annotXformNudge(-90)" title="Turn a quarter turn anticlockwise">↺ 90°</button>
+        <button type="button" class="annot-tool" onclick="annotXformNudge(90)" title="Turn a quarter turn clockwise">↻ 90°</button>
+        <button type="button" class="annot-tool" id="annotXformStraightenBtn" onclick="annotXformStraightenStart()" title="Straighten: click this, then drag a line along an edge that should be level (a table rule, the base of a diagram, a line of print) — the picture turns to make it so.">📐 Straighten…</button>
+        <label id="annotXformGrowWrap" style="font-size:0.8rem;display:inline-flex;align-items:center;gap:6px;" title="On: the canvas grows so a turned page keeps all four corners. Off: the picture stays exactly the same size and the corners are cut off.">
+          <input type="checkbox" id="annotXformGrow" checked onchange="annotXformSetGrow(this.checked)" style="width:15px;height:15px;cursor:pointer;"> Grow to fit
+        </label>
+        <span style="width:1px;height:20px;background:#e0c9a0;"></span>
+        <span style="display:inline-flex;align-items:center;gap:8px;">
+          <button type="button" class="annot-tool" onclick="annotXformReset()" title="Back to the original size and 0° — nothing resized, turned or slanted">⟲ Reset</button>
+          <button type="button" class="btn btn-primary" style="padding:5px 14px;font-size:0.8rem;" onclick="annotXformApply()" title="Burn the resize / turn into the picture (Enter)">✓ Apply</button>
+          <button type="button" class="btn btn-ghost" style="padding:5px 12px;font-size:0.8rem;" onclick="annotXformCancel()" title="Put the picture back as it was (Esc)">✕ Cancel</button>
+        </span>
+      </div>
+      <div id="annotStage"><canvas id="annotCanvas"></canvas><canvas id="annotSelCanvas"></canvas></div>
+      <details class="annot-guide">
+        <summary>What each tool does, and every keyboard shortcut</summary>
+        <p class="hint">Erase / Paint: drag over the image — <b>click then Shift-click</b> joins the two points with a straight line (Photoshop style), and <b>Shift-drag</b> locks the stroke to horizontal / vertical. <b>Fill</b>: click inside a shape to flood it with colour. <b>Clone</b>: click to set the source, then drag to stamp that area elsewhere (Alt+click re-sets the source) — once the source is set, <b>the ring under your pointer shows the exact patch that will be stamped</b>, so you can line it up before you press. <b>History</b>: brush the original picture back by hand. <b>Select / Lasso / Wand</b>: mark out an area, then fill it, move it, delete it, or use AI content-aware fill (Esc deselects). <b>Delete</b> (the key, or 🧽) cuts the selection away to <b>transparent</b> — so with the 🪄 wand you can Alt+click a colour to take it across the whole picture and delete every pixel of it in one go, which is how you get a clean transparent background. The <b>⬜/▨ Erase to</b> button says whether Erase and the paint bucket cut through or paint white; in this app it starts on <b>transparent</b>. <b>Move</b>: drag inside a selection to cut it out and drop it anywhere (Alt to copy), or drag a text label to reposition it. <b>Resize</b>: drag the handles round the box — corners resize both ways, edges one way, and the corner opposite the one you drag stays exactly where it is. Drag inside the box to move it, hold <b>Shift</b> to swap between keeping the shape and stretching it freely, or type a width / height percentage in the panel. <b>Rotate / Skew</b>: turn or slant the selected object — or, with nothing selected, the whole picture, which is how you straighten a page that went into the scanner crooked. Drag on the image (Shift snaps to 15°) or use the sliders, and <b>📐 Straighten</b> lets you trace a line along a crooked edge to level it in one go. Enter applies the turn, Esc cancels it. Line: drag from start to end. Text: click, type, then Enter.<br><b>📋 Paste a picture:</b> press <kbd>Ctrl</kbd>+<kbd>V</kbd> (⌘V) — or the 📋 button — to drop whatever picture is on the clipboard straight onto this one. It lands <b>as its own layer</b>, scaled to fit inside the picture rather than covering it, with the <b>resize handles already on it</b>: drag a corner to size it, drag the middle to move it, turn or slant it if you want, then <b>✓ Apply</b> to burn it in (<b>Esc</b> takes it away again and leaves no trace).<br><b>Scroll</b> over the image to zoom (down to single pixels); <b>hold Space</b> (or the middle mouse button) and drag to pan; <b>scroll over either slider</b> to change it. Set the brush to <b>1&nbsp;px</b> for pixel-perfect edits.<br><b>Brush size:</b> Erase, Paint, Clone, History and Line draw a <b>ring around your pointer at the exact size of the mark</b> they will make, at whatever zoom you are on. Change the size with the slider, the wheel over it, or <kbd>[</kbd> and <kbd>]</kbd>. With <b>Clone</b> the ring is <b>filled with the pixels it is about to stamp</b>.<br><b>✨ Regenerate:</b> type what you want in the purple bar and the AI redraws it. Select an area first and <b>only that area can change</b>; with nothing selected the whole picture is redrawn. It is one step either way, so <b>↶ Undo</b> puts the picture straight back if the AI missed.
+        <br><b>Keys:</b> <kbd>E</kbd> erase · <kbd>B</kbd> paint · <kbd>G</kbd> fill · <kbd>S</kbd> clone · <kbd>Y</kbd> history · <kbd>M</kbd> select · <kbd>L</kbd> lasso · <kbd>W</kbd> wand · <kbd>V</kbd> move · <kbd>R</kbd> rotate · <kbd>K</kbd> skew · <kbd>F</kbd> resize · <kbd>U</kbd> line · <kbd>T</kbd> text · <kbd>[</kbd> <kbd>]</kbd> brush size · <kbd>Del</kbd> delete the selection · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>+</kbd> <kbd>−</kbd> zoom · <kbd>0</kbd> fit · <kbd>Esc</kbd> deselect / cancel the transform · <kbd>Enter</kbd> apply</p>
+      </details>
+    </div>
+    <div class="overlay-foot">
+      <button class="btn btn-ghost" onclick="closeAnnotTool()" type="button" title="Throw this away and go back to the start">Discard</button>
+      <button class="btn btn-outline" onclick="annotDownloadPng()" type="button" title="Save a full-size PNG straight away, at the size it is now, with no questions asked. The editor stays open.">⬇️ Quick PNG</button>
+      <button class="btn btn-primary" onclick="applyAnnotTool()" type="button" title="Choose the format, the size and the quality — and see the real file size before you save it">⬇️ Export…</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== THE EXPORT PANEL ==================== -->
+<div class="overlay" id="exOverlay">
+  <div class="overlay-card" style="max-width:520px;">
+    <div class="overlay-head"><h3>⬇️ Export</h3><button class="close" onclick="exClose()" type="button" title="Back to the editor — nothing here changes the picture">×</button></div>
+    <div class="overlay-body">
+
+      <div class="ex-row">
+        <span class="ex-label">Format</span>
+        <div class="ex-seg">
+          <button type="button" class="ex-chip" data-exfmt="png"  onclick="exSetFormat('png')">PNG</button>
+          <button type="button" class="ex-chip" data-exfmt="jpeg" onclick="exSetFormat('jpeg')">JPEG</button>
+          <button type="button" class="ex-chip" data-exfmt="webp" onclick="exSetFormat('webp')">WebP</button>
+        </div>
+        <p class="ex-note" id="exNote"></p>
+        <div class="ex-warn" id="exAlphaWarn" style="display:none;">
+          <b>This picture has transparent areas</b>, and this format cannot keep them — they will be filled with the colour below. Choose <b>PNG</b> or <b>WebP</b> to keep the cut-out.
+        </div>
+      </div>
+
+      <div class="ex-row" id="exBgRow" style="display:none;">
+        <span class="ex-label">Fill the empty areas with</span>
+        <div class="ex-slider">
+          <input type="color" id="exBg" value="#ffffff" oninput="exSetBg(this.value)">
+          <span class="ex-note" style="margin:0;">White is usually right. Black or a brand colour if the picture is going somewhere dark.</span>
+        </div>
+      </div>
+
+      <div class="ex-row" id="exQualityRow">
+        <span class="ex-label">Quality</span>
+        <div class="ex-slider">
+          <input type="range" id="exQuality" min="20" max="100" step="1" value="88" oninput="exSetQuality(this.value)">
+          <span class="ex-num" id="exQualityVal">88%</span>
+        </div>
+        <p class="ex-note">Around 85% is usually indistinguishable from the original and a fraction of the size. Below about 60% the edges of text start to smudge.</p>
+      </div>
+
+      <div class="ex-row">
+        <span class="ex-label">Size</span>
+        <div class="ex-seg" style="margin-bottom:12px;">
+          <button type="button" class="ex-chip" data-exscale="100" onclick="exSetScale(100)">Full size</button>
+          <button type="button" class="ex-chip" data-exscale="75"  onclick="exSetScale(75)">75%</button>
+          <button type="button" class="ex-chip" data-exscale="50"  onclick="exSetScale(50)">50%</button>
+          <button type="button" class="ex-chip" data-exscale="33"  onclick="exSetScale(33)">33%</button>
+          <button type="button" class="ex-chip" data-exscale="25"  onclick="exSetScale(25)">25%</button>
+        </div>
+        <div class="ex-slider">
+          <input type="range" id="exScale" min="5" max="100" step="1" value="100" oninput="exSetScale(this.value)">
+          <label style="font-size:0.79rem;color:var(--text-muted);white-space:nowrap;">longest side
+            <input type="number" id="exMaxSide" min="16" step="1" onchange="exSetMaxSide(this.value)" title="Type a target for the longest side in pixels — the percentage follows"> px
+          </label>
+        </div>
+        <p class="ex-note">Scaling only ever goes <b>down</b>. Anything above the pixels that are actually there would be invented detail.</p>
+      </div>
+
+      <div class="ex-row">
+        <span class="ex-label">File name</span>
+        <div class="ex-name">
+          <input type="text" id="exName" spellcheck="false" placeholder="edited-image">
+          <span class="ex-ext" id="exExt">.png</span>
+        </div>
+      </div>
+
+      <div class="ex-summary">
+        <span>Dimensions <span id="exDims"></span></span>
+        <span>File size <span id="exSize"></span></span>
+      </div>
+    </div>
+    <div class="overlay-foot">
+      <button class="btn btn-ghost" onclick="exClose()" type="button">Back to editing</button>
+      <button class="btn btn-outline" onclick="exCopy()" type="button" title="Copy the picture to the clipboard, ready to paste into a document, a slide or a chat. Always a PNG at the chosen size — image/png is the only type every app agrees on.">📋 Copy image</button>
+      <button class="btn btn-primary" onclick="exDownload()" type="button">⬇️ Download</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== TOASTS ==================== -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script type="module" src="editor.js"></script>
+</body>
+</html>
