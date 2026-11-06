@@ -54,7 +54,75 @@ let geminiImageModels = [];
 // time, so the models can arrive late — which they do, because the whole
 // Firebase import is dynamic. That is what keeps the editor itself usable the
 // instant the page loads instead of behind a 300 KB SDK download.
-const imageAiReady = () => geminiImageModels.length > 0;
+const imageAiReady = () => geminiImageModels.length > 0 || !!openAiImageKey();
+
+// ── ChatGPT Images 2.6, by a key typed into THIS browser ─────────────────
+// OpenAI's Images 2.6 (November 2026) is the picture model every Polymath app
+// draws with now. The portal reaches it through the `openAiImage` server
+// function, but that function only answers a SIGNED-IN caller and this app has
+// no accounts, so here it is reached with an OpenAI key the user types once
+// (🔑 in the purple bar). The key lives in this browser's localStorage only —
+// never in this file, the repository or a server — and is shared with PDF
+// Studio, which sits on the same origin. With a key saved, every ✨ edit goes
+// to `gpt-image-2.6-sunburst` (OpenAI's 2.6 model for precise edits) FIRST;
+// Gemini through Firebase AI Logic stays BEHIND it, and is the only route when
+// no key is saved, exactly as before.
+const OPENAI_IMAGE_MODEL = 'gpt-image-2.6-sunburst';
+const OPENAI_IMAGE_KEY_LS = 'polymathOpenAiImageKey';
+function openAiImageKey() { try { return (localStorage.getItem(OPENAI_IMAGE_KEY_LS) || '').trim(); } catch (_) { return ''; } }
+function openAiImageSetKey(k) {
+  try { if (k) localStorage.setItem(OPENAI_IMAGE_KEY_LS, k); else localStorage.removeItem(OPENAI_IMAGE_KEY_LS); } catch (_) {}
+}
+// 🔑 in the purple bar: paste a key, or clear the box to forget it.
+function annotAiOpenAiKey() {
+  const had = openAiImageKey();
+  const k = window.prompt('✨ Regenerate and ✨ AI fill draw with OpenAI\'s ChatGPT Images 2.6 when an OpenAI API key (sk-…) is saved here.\n\n'
+    + 'Pressing them sends a picture of what you are editing to OpenAI. The key is kept in this browser only.\n\n'
+    + 'Paste a key, or clear the box and press OK to remove it' + (geminiImageModels.length ? ' (Gemini will be used instead).' : '.'), had);
+  if (k === null) return;
+  openAiImageSetKey(k.trim());
+  if (typeof showToast === 'function') showToast(k.trim() ? 'OpenAI key saved — pictures now use ChatGPT Images 2.6' : 'OpenAI key removed from this browser', 'success');
+  _aiVisibilitySync();
+}
+function _b64ToBlob(b64, mime) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime || 'image/png' });
+}
+// An EDIT of the one picture: multipart to /images/edits. No `size` (the API's
+// default keeps the picture's own shape) and no `input_fidelity` (the 2.x
+// models refuse it). A 400 about one of the extras earns ONE bare retry.
+async function openAiImageEdit(prompt, m) {
+  const key = openAiImageKey();
+  if (!key) throw new Error('no OpenAI key is saved in this browser');
+  const form = (extras) => {
+    const fd = new FormData();
+    fd.append('model', OPENAI_IMAGE_MODEL);
+    fd.append('prompt', prompt);
+    fd.append('n', '1');
+    fd.append('image', _b64ToBlob(m.data, m.mimeType), 'picture.png');
+    if (extras) { fd.append('quality', 'high'); fd.append('output_format', 'png'); }
+    return fd;
+  };
+  const send = async (fd) => {
+    const resp = await fetch('https://api.openai.com/v1/images/edits', { method: 'POST', headers: { Authorization: 'Bearer ' + key }, body: fd });
+    const json = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      const err = new Error('ChatGPT Images ' + resp.status + ': ' + ((json && json.error && json.error.message) || 'refused'));
+      err.status = resp.status;
+      throw err;
+    }
+    const item = json && json.data && json.data[0];
+    if (item && item.b64_json) return 'data:image/png;base64,' + item.b64_json;
+    throw new Error('ChatGPT Images did not return a picture');
+  };
+  try { return await send(form(true)); }
+  catch (e) {
+    if (!(e.status === 400 && /unknown|unsupported|not support|invalid value|additional propert/i.test(e.message))) throw e;
+    return await send(form(false));
+  }
+}
 
 async function _initImageAi() {
   if (!AI_ENABLED) return;
@@ -182,8 +250,13 @@ async function generateEnhancedImageDataUrl(prompt, media) {
   if (!imageAiReady()) throw new Error('AI image enhancement is not configured yet');
   const m = Array.isArray(media) ? media[0] : media;
   if (!m || !m.data) throw new Error('no image to enhance');
-  const parts = [prompt, { inlineData: { mimeType: m.mimeType, data: m.data } }];
   let lastError = null;
+  // ChatGPT Images 2.6 first, when this browser holds a key; Gemini behind it.
+  if (openAiImageKey()) {
+    try { return await openAiImageEdit(prompt, m); }
+    catch (e) { lastError = e; console.warn('ChatGPT Images 2.6 failed — trying Gemini', e); }
+  }
+  const parts = [prompt, { inlineData: { mimeType: m.mimeType, data: m.data } }];
   for (const model of geminiImageModels) {
     try {
       const result = await model.generateContent(parts);
@@ -2911,6 +2984,7 @@ document.addEventListener('keydown', e => {
 // The list is checked against the markup by tools/handler-tests.mjs, which is
 // the only thing that can catch a button added to the HTML and forgotten here.
 Object.assign(window, {
+  annotAiOpenAiKey,
   // the door in
   peZoneClick, pePickFiles, peDrop,
   // the editor
