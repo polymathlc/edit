@@ -314,6 +314,7 @@ input[type=checkbox], input[type=radio] { appearance: auto; -webkit-appearance: 
         <input type="text" id="annotAiPrompt" placeholder="Say what you want changed — “rub out the pencil marks”, “make the arrow red”, “redraw this beaker cleanly”" style="flex:1 1 360px;min-width:200px;padding:7px 11px;border:1px solid var(--border);border-radius:8px;font-size:0.85rem;background:#fff;color:var(--text);" onkeydown="if(event.key==='Enter'){event.preventDefault();annotAiRegen();}">
         <button type="button" class="btn btn-primary" id="annotAiGoBtn" style="padding:6px 14px;font-size:0.82rem;" onclick="annotAiRegen()" title="Redraw with the AI. Select an area first and only that area can change; with nothing selected the whole picture is redrawn. ↶ Undo puts it back either way.">✨ Regenerate</button>
         <span style="font-size:0.75rem;color:#5b21b6;white-space:nowrap;">changes <b id="annotAiScope">the whole picture</b></span>
+        <button type="button" class="btn" style="padding:4px 10px;font-size:0.75rem;" onclick="annotAiOpenAiKey()" title="Save an OpenAI API key in this browser so ✨ Regenerate and ✨ AI fill draw with ChatGPT Images 2.6 (gpt-image-2.6-sunburst). Without one, Gemini is used.">🔑 OpenAI key</button>
       </div>
 
       <!-- Resize / rotate / skew panel: appears while a transform is open,

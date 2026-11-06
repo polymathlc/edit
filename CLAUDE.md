@@ -2,6 +2,14 @@
 
 Guidance for Claude when working in this repo.
 
+
+## 🖼 ChatGPT Images 2.6 with a browser key (Nov 2026)
+
+✨ Regenerate and ✨ AI fill call `gpt-image-2.6-sunburst` on `/images/edits` FIRST when an OpenAI key is saved
+(🔑 OpenAI key in the purple bar; localStorage `polymathOpenAiImageKey`, shared with PDF Studio on the same origin).
+Gemini through Firebase AI Logic stays behind it and is the only route with no key. The portal's `openAiImage`
+server function is not used because it needs a signed-in caller and this app has no accounts.
+
 ## What this is
 
 A standalone photo editor: `index.html` + `editor.js`, two static files, no
